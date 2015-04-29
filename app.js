@@ -1,7 +1,9 @@
 var express = require('express')
-config = require('./lib/config')
-RestClient = require('node-rest-client').Client,
+util = require('util');
 Q = require('q'),
+config = require('./lib/config'),
+RestClient = require('node-rest-client').Client,
+_ = require('underscore'),
 jf = require('jsonfile');
 
 var app = express();
@@ -17,43 +19,28 @@ app.get('/', function (req, res) {
   res.sendfile(__dirname + '/public/views/index.html');
 });
 
+app.get('/run', function (req, res) {
+  doTest('www.andyshora.com');
+  res.end('Test queued');
+});
+
 var currentTestId = null;
 
 function cleanup() {
   currentTestId = null;
 }
 
-function initialTestResponse(data) {
-  console.log('success', data);
+function doTest(url) {
+  if (!url) {
+    return;
+  }
 
-  // store ref to current test id
-  currentTestId = data.data.testId;
-  console.log('currentTestId', currentTestId);
+  // do the test
+  return getResource('http://www.webpagetest.org/runtest.php?url=' + encodeURIComponent(url) + '&f=json&k=' + config.webPageTestApiKey, 10000)
+    .then(onTestStarted, onResourceError);
 
-  console.log('resultsUrl', data.data.jsonUrl);
-
-  getResults(data.data.jsonUrl);
 }
 
-function onResourceError(err) {
-  console.log('error', err);
-  cleanup();
-}
-
-// do the test
-getResource('http://www.webpagetest.org/runtest.php?url=www.andyshora.com&f=json&k=' + config.webPageTestApiKey, 10000)
-  .then(initialTestResponse, onResourceError);
-
-function onResultsRetrieved(data) {
-  console.log('onResultsRetrieved', data);
-
-  // write the file
-  jf.writeFile('public/json/' + currentTestId + '.json', data, function(err) {
-    console.log(err)
-  })
-
-  cleanup();
-}
 
 /**
  * Try to fetch the results json - takes a while in the queue
@@ -66,6 +53,44 @@ function getResults(resultsUrl) {
   }
   getResource(resultsUrl, 10000)
     .then(onResultsRetrieved, onResourceError)
+}
+
+/**
+ * Full test results are now available
+ * @param  {object} data Test results
+ * @return {null}
+ */
+function onResultsRetrieved(data) {
+  console.log('onResultsRetrieved', data);
+
+  // write the file
+  jf.writeFile('public/json/' + currentTestId + '.json', data, function(err) {
+    console.log(err);
+  });
+
+  jf.writeFile('public/json/latest.json', data, function(err) {
+    console.log(err);
+  });
+
+  cleanup();
+}
+
+/**
+ * The test has been registered with webpagetest.org
+ * Starts polling for results
+ * @param  {object} data Object describing endpoints at which results will eventually live
+ * @return {null}
+ */
+function onTestStarted(data) {
+  console.log('success', data);
+
+  // store ref to current test id
+  currentTestId = data.data.testId;
+  console.log('currentTestId', currentTestId);
+
+  console.log('resultsUrl', data.data.jsonUrl);
+
+  getResults(data.data.jsonUrl);
 }
 
 /**
@@ -98,4 +123,14 @@ function getResource(url, pollInterval) {
   }, pollInterval);
 
   return deferred.promise;
+}
+
+/**
+ * Error encountered when fetching resource
+ * @param  {object} err The error object
+ * @return {null}
+ */
+function onResourceError(err) {
+  console.log('error', err);
+  cleanup();
 }
